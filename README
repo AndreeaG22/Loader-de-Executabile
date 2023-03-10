@@ -1,0 +1,116 @@
+Nume: Matei Andreea-Gabriela -323CB
+
+Tema1-Loader de executabile
+
+Organizare
+
+-->static void segv_handler(int signum, siginfo_t *info, void *context)
+
+in acesta functie se executa urmatoarele:
+-se verifica daca semnalul primit este de de tip SIGSEGV(adica daca a existat un
+acces ilegal al memoriei), daca nu, atunci se apeleaza handler-ul default
+-se apeleaza functia verify_segments(siginfo_t *info, int signum) pentru a gasi
+segmentul la care s-a produs fault-ul
+-daca rezultatul retunat de functie este NULL, atunci fault-ul se afla in afara
+segmentelor din executabil, astfel se apeleaza handler-ul default
+-altfel, pointer-ul opac data, din structura so_seg_t este folosit pentru a
+verifica daca o pagina este mapata sau nu astfel:
+    -pointer-ul va pointa catre inceputul unui vector in care se va stoca "1"
+    pentru o pagina deja mapata si "0" pentru o magina nemapata
+    -se va aloca memorie pt vector(daca inca nu s-a realizat deja acest lucru),
+    care va avea lungimea egala cu numarul de pagini din segment cuprinse intre
+    inceputul segmentului si inceputul zonei "unspecified" din segment(adica 
+    numarul de pagini din mem_size, intrucat acesta este intervalul maxim 
+    presupus in care se pot mapa pagini).
+    -se calculeaza indexul paginii pe care trebuie sa o mapam astfel:
+        page_index = (adresa_page_fault - adresa_inceput_de_segment)/dim_pagina
+    -daca in vector, la indexul page_index avem valoarea "1", inseamna ca pagina
+    a fost deja mapata, atunci se incearca un acces la memorie nepermis => vom
+    apela handler-ul default
+    -daca dupa verificarile de mai sus nu a fost apelat handler-ul default,
+    atunci se apeleaza functia page_map(...) pentru a maparea paginii
+
+
+-->static void page_map(so_seg_t *fault_segment, siginfo_t *info)
+
+in aceasta functie se executa urmatoarele:
+-pentru usurinta scrierii si intelegerii codului am retinut in variabile cu nume
+sugestive toate elementele calculate:
+    ----segment_beginning = adresa de inceput a segmentului
+    ----page_size = dimensiunea unei pagini
+    ----page_index = indexul paginii pe care trebuie sa o mapam(calculat si
+    anterior)
+    ----index = distanta pe care trebuie sa o parcurgem in segment pana ajungem la 
+    pagina pe care trebuie sa o mapam = page_index * page_size
+    ----map_address = adresa la care trebuie sa mapam pagina = 
+    adresa_inceput_de_segment
+    + index
+    ----map_result = rezultatul functiei mmap(...) care va mapa pagina
+    ----file_address = adresa din segment pana la care eu pot sa mapez si sa 
+    copiez continutul din fisier
+-se mapeaza pagina cu mmap(...) si se verifica daca a fost mapata cu succes;
+daca nu a fost mapata cu succes, atunci se apeleaza handler-ul default. 
+-parametrii pentru mmap sunt urmatorii:
+    ----map_address = adresa la care trebuie sa mapam pagina
+    ----page_size = dimensiunea unei pagini(cat trebuie sa mapam)
+    ----PROT_WRITE = permisiuni de scriere (pentru a putea scrie ulterior 
+    in pagina)
+    ----MAP_ANON = maparea unei pagini anonime(care mapeaza pagina si o
+    zeroizeaza, iar ca file descriptor se foloseste -1--argumentele fd si offset
+    sunt ignorate in acest caz); MAP_ANON este de ajutor atunci cand mapam o pagina
+    care depaseste file_size intrucat la final nu trebuie sa mai scriem noi "0"
+    ----MAP_SHARED = care face maparea paginii curente vizibila si altor procese
+    care mapeaza in aceeasi regiune
+-inainte de a scrie in memorie trebuie sa verificam daca in timp ce scriem 
+depasim file_size(adica zona dintre inceputul segmentului si zona de unde
+incepem sa zeroizam). Verificarea se realizeaza astfel:
+    --daca adresa de unde incepem sa scriem + dimensiunea paginii este mai mare
+    decat file_size si adresa de unde incepem sa scriem este mai mica decat
+    file_size, atunci trebuie sa scriem doar pana la file_size, deci lungimea
+    pe care trebuie sa o scriem este diferenta dintre file_addres si map_address;
+    --daca adresa de unde incepem sa scriem + dimensiunea paginii este mai mare
+    decat file_size si adresa de unde incepem sa scriem este mai mare decat
+    file_size, atunci lungimea este 0;
+    --altfel, lungimea este dimensiunea paginii
+-se apeleaza functia write_into_memory(...) pentru a scrie in memorie, apoi se
+marcheaza pagina ca fiind mapata in vectorul de pagini mapate
+
+
+-->void write_into_memory(so_seg_t *fault_segment, void *map_result, int len,
+                                                                    int index)
+
+in aceasta functie se executa urmatoarele:
+-cu lseek se pozitioneaza cursorul in fisier la offsetul de unde trebuie sa
+se inceapa scrierea in memorie; SEEK_SET face ca pozitionarea cursorului
+in fisier sa fie la offsetul specificat de argumentul offset
+-cu read scriem in memorie "len" octeti(calculat anterior)
+-cu mprotect setam permisiunile paginii mapate, permisiuni pe care le luam din
+campul perm din structura so_seg_t
+
+-->so_seg_t *verify_segments(siginfo_t *info, int signum)
+
+in aceasta functie se executa urmatoarele:
+--se parcurge vectorul de segmente si se verifica daca adresa de unde a fost
+generat page fault se afla in interiorul unui segment
+--interiorul unui segment se verifica astfel:
+    ---daca adresa de unde a fost generat page fault este mai mare decat
+    adresa de inceput a segmentului si mai mica decat adresa de sfarsit a
+    segmentului, atunci adresa de unde a fost generat page fault se afla
+    in interiorul segmentului
+--daca adresa de unde a fost generat page fault nu se afla in interiorul
+unui segment atunci functia returneaza NULL
+
+Implementare
+
+-intregul enunt al temei a fost implementat 
+
+Bibliografie(resurse care m-au ajutat in rezolvarea temei):
+
+https://ocw.cs.pub.ro/courses/so/laboratoare/laborator-06
+https://ocw.cs.pub.ro/courses/so/laboratoare/laborator-04
+https://man7.org/linux/man-pages/man2/lseek.2.html
+https://man7.org/linux/man-pages/man2/mmap.2.html
+https://linuxhint.com/using_mmap_function_linux/
+https://man7.org/linux/man-pages/man2/sigaction.2.html
+https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
+https://man7.org/linux/man-pages/man3/perror.3.html
